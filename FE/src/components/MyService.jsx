@@ -6,7 +6,7 @@ import { AuthContext } from "./core/Auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import instance from "../utils/axiosInstance";
 import { Tag, Table, Space, Card, Button, Tooltip, Modal, Form, Input, message, Popconfirm } from "antd";
-import { LinkOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined } from "@ant-design/icons";
+import { LinkOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined, MessageOutlined, SendOutlined, CloseOutlined } from "@ant-design/icons";
 
 const MyService = () => {
   const navigate = useNavigate();
@@ -17,6 +17,11 @@ const MyService = () => {
   const [editingInfo, setEditingInfo] = useState(null);
   const [isCopied, setIsCopied] = useState(false);
   const queryClient = useQueryClient();
+  const [isChatVisible, setIsChatVisible] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatMessages, setChatMessages] = useState([
+    { type: 'system', content: 'Xin chào! Tôi có thể giúp gì cho bạn?' }
+  ]);
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -287,6 +292,35 @@ const MyService = () => {
     },
   ];
 
+  const handleSendMessage = async () => {
+    if (!chatMessage.trim()) return;
+    if (!currentUser?._id) {
+      message.error('Không thể gửi tin nhắn: Không tìm thấy ID người dùng.');
+      return;
+    }
+
+    const userMessage = chatMessage;
+    setChatMessages(prev => [...prev, { type: 'user', content: userMessage }]);
+    setChatMessage(''); // Clear input immediately
+
+    try {
+      const response = await instance.post('https://n8nhwcpc.id.vn/webhook/task-manager-2t', {
+        userId: currentUser._id,
+        message: userMessage
+      });
+
+      if (response.data && response.data.reply) {
+        setChatMessages(prev => [...prev, { type: 'system', content: response.data.reply }]);
+      } else {
+        message.warning('Không nhận được phản hồi từ hệ thống.');
+      }
+    } catch (error) {
+      console.error('Lỗi khi gửi tin nhắn:', error);
+      message.error('Gửi tin nhắn thất bại. Vui lòng thử lại sau.');
+      setChatMessages(prev => [...prev, { type: 'system', content: 'Đã xảy ra lỗi khi gửi tin nhắn.' }]);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -298,7 +332,7 @@ const MyService = () => {
   if (!userData || !userData.data || !userData.data.service) {
     return (
       <div>
-       
+        <Header />
         <div className="container mx-auto pt-[100px] py-12">
           <section className="bg-gray-100 rounded-[32px] max-w-6xl mx-auto mt-8 p-8 text-center">
             <h2 className="text-2xl font-bold mb-8">Dịch vụ của tôi</h2>
@@ -312,7 +346,7 @@ const MyService = () => {
 
   return (
     <div>
-   
+      <Header />
       <div className="container mx-auto pt-[100px] py-12">
         <section className="bg-gray-100 rounded-[32px] max-w-6xl mx-auto mt-8 p-8">
           <h2 className="text-2xl font-bold text-center mb-8">
@@ -423,6 +457,78 @@ const MyService = () => {
         </section>
       </div>
 
+      {/* Floating Chat Button and Window */}
+      <div className="fixed bottom-8 right-8 z-50">
+        {isChatVisible && (
+          <div className="absolute bottom-0 right-0 w-80 bg-white rounded-lg shadow-xl">
+            <div className="bg-blue-500 text-white p-4 rounded-t-lg flex justify-between items-center">
+              <h3 className="text-lg font-semibold">Hỗ trợ trực tuyến</h3>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                onClick={() => setIsChatVisible(false)}
+                className="text-white hover:text-gray-200"
+              />
+            </div>
+            <div className="h-96 flex flex-col">
+              <div className="flex-1 p-4 overflow-y-auto">
+                {chatMessages.map((msg, index) => (
+                  <div
+                    key={index}
+                    className={`mb-4 ${
+                      msg.type === 'user' ? 'text-right' : 'text-left'
+                    }`}
+                  >
+                    <div
+                      className={`inline-block p-3 rounded-lg ${
+                        msg.type === 'user'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                    >
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-4 border-t">
+                <div className="flex gap-2">
+                  <Input
+                    value={chatMessage}
+                    onChange={(e) => setChatMessage(e.target.value)}
+                    placeholder="Nhập tin nhắn..."
+                    onPressEnter={handleSendMessage}
+                  />
+                  <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={handleSendMessage}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {!isChatVisible && (
+          <Button
+            type="primary"
+            shape="circle"
+            size="large"
+            icon={<MessageOutlined />}
+            className="shadow-lg hover:shadow-xl transition-all duration-300"
+            style={{
+              width: '60px',
+              height: '60px',
+              backgroundColor: '#1890ff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            onClick={() => setIsChatVisible(true)}
+          />
+        )}
+      </div>
+
       <Modal
         title={editingInfo ? "Thông tin" : "Thêm thông tin mới"}
         open={isModalVisible}
@@ -487,7 +593,7 @@ const MyService = () => {
         </Form>
       </Modal>
 
-   
+      <Footer />
     </div>
   );
 };
