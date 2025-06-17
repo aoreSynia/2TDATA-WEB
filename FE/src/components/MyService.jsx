@@ -16,12 +16,17 @@ const MyService = () => {
   const [form] = Form.useForm();
   const [editingInfo, setEditingInfo] = useState(null);
   const [isCopied, setIsCopied] = useState(false);
-  const queryClient = useQueryClient();
-  const [isChatVisible, setIsChatVisible] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
   const [chatMessages, setChatMessages] = useState([
-    { type: 'system', content: 'Xin chào! Tôi có thể giúp gì cho bạn?' }
+    { type: 'bot', content: 'Xin chào! Tôi có thể giúp gì cho bạn?' }
   ]);
+  const [isFaccChatOpen, setIsFaccChatOpen] = useState(false);
+  const [faccChatMessage, setFaccChatMessage] = useState('');
+  const [faccChatMessages, setFaccChatMessages] = useState([
+    { type: 'bot', content: 'Xin chào từ Facc Chat! Tôi có thể giúp gì cho bạn?' }
+  ]);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -292,33 +297,81 @@ const MyService = () => {
     },
   ];
 
-  const handleSendMessage = async () => {
-    if (!chatMessage.trim()) return;
-    if (!currentUser?._id) {
-      message.error('Không thể gửi tin nhắn: Không tìm thấy ID người dùng.');
-      return;
-    }
-
-    const userMessage = chatMessage;
-    setChatMessages(prev => [...prev, { type: 'user', content: userMessage }]);
-    setChatMessage(''); // Clear input immediately
-
-    try {
+  // Chat mutation (for original chat)
+  const chatMutation = useMutation({
+    mutationFn: async (message) => {
       const response = await instance.post('https://n8nhwcpc.id.vn/webhook/task-manager-2t', {
         userId: currentUser._id,
-        message: userMessage
+        message: message
       });
-
-      if (response.data && response.data.reply) {
-        setChatMessages(prev => [...prev, { type: 'system', content: response.data.reply }]);
-      } else {
-        message.warning('Không nhận được phản hồi từ hệ thống.');
-      }
-    } catch (error) {
-      console.error('Lỗi khi gửi tin nhắn:', error);
-      message.error('Gửi tin nhắn thất bại. Vui lòng thử lại sau.');
-      setChatMessages(prev => [...prev, { type: 'system', content: 'Đã xảy ra lỗi khi gửi tin nhắn.' }]);
+      console.log('Full Webhook Response:', response);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      // Add bot response to chat
+      setChatMessages(prev => [...prev, { 
+        type: 'bot', 
+        content: data || 'Cảm ơn bạn đã liên hệ. Chúng tôi sẽ phản hồi sớm nhất có thể!' 
+      }]);
+    },
+    onError: (error) => {
+      console.error('Error sending message:', error);
+      setChatMessages(prev => [...prev, { 
+        type: 'bot', 
+        content: 'Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.' 
+      }]);
     }
+  });
+
+  // Facc Chat mutation (for new chat)
+  const faccChatMutation = useMutation({
+    mutationFn: async (message) => {
+      // Placeholder for facc ID - REPLACE THIS WITH YOUR ACTUAL FACC ID
+      const faccId = "38472947328"; 
+      const response = await instance.post('https://n8nhwcpc.id.vn/webhook/task-manager-2t', { // Assuming same webhook for now
+        userId: faccId,
+        message: message
+      });
+      console.log('Full Facc Webhook Response:', response);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      setFaccChatMessages(prev => [...prev, { 
+        type: 'bot', 
+        content: data || 'Cảm ơn bạn đã liên hệ từ Facc Chat. Chúng tôi sẽ phản hồi sớm nhất có thể!' 
+      }]);
+    },
+    onError: (error) => {
+      console.error('Error sending facc message:', error);
+      setFaccChatMessages(prev => [...prev, { 
+        type: 'bot', 
+        content: 'Xin lỗi, đã có lỗi xảy ra với Facc Chat. Vui lòng thử lại sau.' 
+      }]);
+    }
+  });
+
+  const handleSendMessage = () => {
+    if (!chatMessage.trim() || !currentUser?._id) return;
+    
+    // Add user message to chat
+    setChatMessages(prev => [...prev, { type: 'user', content: chatMessage }]);
+    
+    // Send message using mutation
+    chatMutation.mutate(chatMessage);
+    
+    setChatMessage('');
+  };
+
+  const handleFaccSendMessage = () => {
+    if (!faccChatMessage.trim()) return;
+    
+    // Add user message to facc chat
+    setFaccChatMessages(prev => [...prev, { type: 'user', content: faccChatMessage }]);
+    
+    // Send message using facc mutation
+    faccChatMutation.mutate(faccChatMessage);
+    
+    setFaccChatMessage('');
   };
 
   if (isLoading) {
@@ -367,11 +420,11 @@ const MyService = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {userData.data.service
                 .filter(userService => userService.status !== "rejected")
-                .map((userService) => {
+                .map((userService, index) => {
                 const authorizedLink = findAuthorizedLink(userService);
                 return (
                   <div
-                    key={userService._id}
+                    key={`${userService._id}-${index}`}
                     className={`bg-white rounded-2xl p-6 flex flex-col items-center shadow ${
                       userService.status === "approved" && authorizedLink
                         ? "cursor-pointer hover:shadow-lg transition"
@@ -429,8 +482,8 @@ const MyService = () => {
           ) : (
             <Table
               columns={columns}
-              dataSource={userData.data.service.filter(service => service.status !== "rejected")}
-              rowKey="_id"
+              dataSource={userData.data.service.filter(service => service.status !== "rejected").map((item, index) => ({ ...item, id: `${item._id}-${index}` }))}
+              rowKey="id"
               pagination={{ pageSize: 10 }}
             />
           )}
@@ -450,39 +503,42 @@ const MyService = () => {
           
           <Table
             columns={infoColumns}
-            dataSource={userData?.data?.information || []}
-            rowKey="_id"
+            dataSource={userData?.data?.information?.map((item, index) => ({ ...item, id: `${item._id}-${index}` })) || []}
+            rowKey="id"
             pagination={{ pageSize: 10 }}
           />
         </section>
       </div>
 
-      {/* Floating Chat Button and Window */}
-      <div className="fixed bottom-8 right-8 z-50">
-        {isChatVisible && (
-          <div className="absolute bottom-0 right-0 w-80 bg-white rounded-lg shadow-xl">
-            <div className="bg-blue-500 text-white p-4 rounded-t-lg flex justify-between items-center">
-              <h3 className="text-lg font-semibold">Hỗ trợ trực tuyến</h3>
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={() => setIsChatVisible(false)}
-                className="text-white hover:text-gray-200"
-              />
-            </div>
-            <div className="h-96 flex flex-col">
-              <div className="flex-1 p-4 overflow-y-auto">
-                {chatMessages.map((msg, index) => (
-                  <div
-                    key={index}
-                    className={`mb-4 ${
-                      msg.type === 'user' ? 'text-right' : 'text-left'
-                    }`}
+      {/* Conditionally render Chat Interfaces based on user role */}
+      {currentUser?.role === "test" && (
+        <div className="fixed bottom-8 right-8 z-50 flex items-end">
+
+          {/* Facc Chat Interface */}
+          {isFaccChatOpen ? (
+            <div className="bg-white rounded-lg shadow-xl w-96 h-[500px] flex flex-col mr-4"> {/* Added mr-4 for spacing */}
+              {/* Facc Chat Header */}
+              <div className="bg-blue-500 text-white p-4 rounded-t-lg flex justify-between items-center">
+                <h3 className="font-semibold">Chat Member</h3>
+                <Button 
+                  type="text" 
+                  icon={<CloseOutlined />} 
+                  onClick={() => setIsFaccChatOpen(false)}
+                  className="text-white hover:text-gray-200"
+                />
+              </div>
+              
+              {/* Facc Chat Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {faccChatMessages.map((msg, index) => (
+                  <div 
+                    key={index} 
+                    className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <div
-                      className={`inline-block p-3 rounded-lg ${
-                        msg.type === 'user'
-                          ? 'bg-blue-500 text-white'
+                    <div 
+                      className={`max-w-[80%] rounded-lg p-3 ${
+                        msg.type === 'user' 
+                          ? 'bg-blue-500 text-white' 
                           : 'bg-gray-100 text-gray-800'
                       }`}
                     >
@@ -491,6 +547,82 @@ const MyService = () => {
                   </div>
                 ))}
               </div>
+              
+              {/* Facc Chat Input */}
+              <div className="p-4 border-t">
+                <div className="flex gap-2">
+                  <Input
+                    value={faccChatMessage}
+                    onChange={(e) => setFaccChatMessage(e.target.value)}
+                    placeholder="Nhập tin nhắn Facc..."
+                    onPressEnter={handleFaccSendMessage}
+                    disabled={faccChatMutation.isPending}
+                  />
+                  <Button 
+                    type="primary" 
+                    icon={<SendOutlined />}
+                    onClick={handleFaccSendMessage}
+                    loading={faccChatMutation.isPending}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <Tooltip title="Chat Facc ID">
+              <Button
+                type="primary"
+                shape="circle"
+                size="large"
+                icon={<MessageOutlined />}
+                className="shadow-lg hover:shadow-xl transition-all duration-300 mr-4" // Added mr-4 for spacing
+                style={{
+                  width: '60px',
+                  height: '60px',
+                  backgroundColor: '#ff9800', // Different color for facc chat button
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onClick={() => setIsFaccChatOpen(true)}
+              />
+            </Tooltip>
+          )}
+
+          {/* Original Chat Interface */}
+          {isChatOpen ? (
+            <div className="bg-white rounded-lg shadow-xl w-96 h-[500px] flex flex-col">
+              {/* Chat Header */}
+              <div className="bg-blue-500 text-white p-4 rounded-t-lg flex justify-between items-center">
+                <h3 className="font-semibold">Chat với chúng tôi (admin)</h3>
+                <Button 
+                  type="text" 
+                  icon={<CloseOutlined />} 
+                  onClick={() => setIsChatOpen(false)}
+                  className="text-white hover:text-gray-200"
+                />
+              </div>
+              
+              {/* Chat Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {chatMessages.map((msg, index) => (
+                  <div 
+                    key={index} 
+                    className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div 
+                      className={`max-w-[80%] rounded-lg p-3 ${
+                        msg.type === 'user' 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                    >
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              {/* Chat Input */}
               <div className="p-4 border-t">
                 <div className="flex gap-2">
                   <Input
@@ -498,36 +630,39 @@ const MyService = () => {
                     onChange={(e) => setChatMessage(e.target.value)}
                     placeholder="Nhập tin nhắn..."
                     onPressEnter={handleSendMessage}
+                    disabled={chatMutation.isPending}
                   />
-                  <Button
-                    type="primary"
+                  <Button 
+                    type="primary" 
                     icon={<SendOutlined />}
                     onClick={handleSendMessage}
+                    loading={chatMutation.isPending}
                   />
                 </div>
               </div>
             </div>
-          </div>
-        )}
-        {!isChatVisible && (
-          <Button
-            type="primary"
-            shape="circle"
-            size="large"
-            icon={<MessageOutlined />}
-            className="shadow-lg hover:shadow-xl transition-all duration-300"
-            style={{
-              width: '60px',
-              height: '60px',
-              backgroundColor: '#1890ff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-            onClick={() => setIsChatVisible(true)}
-          />
-        )}
-      </div>
+          ) : (
+            <Tooltip title="Chat với chúng tôi">
+              <Button
+                type="primary"
+                shape="circle"
+                size="large"
+                icon={<MessageOutlined />}
+                className="shadow-lg hover:shadow-xl transition-all duration-300"
+                style={{
+                  width: '60px',
+                  height: '60px',
+                  backgroundColor: '#1890ff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onClick={() => setIsChatOpen(true)}
+              />
+            </Tooltip>
+          )}
+        </div>
+      )}
 
       <Modal
         title={editingInfo ? "Thông tin" : "Thêm thông tin mới"}
@@ -540,7 +675,7 @@ const MyService = () => {
         }}
         confirmLoading={addInfoMutation.isPending || updateInfoMutation.isPending}
         width={800}
-        bodyStyle={{ padding: '24px' }}
+        styles={{ body: { padding: '24px' } }}
       >
         <Form
           form={form}
@@ -592,8 +727,6 @@ const MyService = () => {
           </Form.Item>
         </Form>
       </Modal>
-
-      <Footer />
     </div>
   );
 };

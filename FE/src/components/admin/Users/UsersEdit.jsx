@@ -419,6 +419,7 @@ const UsersEdit = () => {
                                         <Select {...field}>
                                             <Option value="admin">Admin</Option>
                                             <Option value="member">Member</Option>
+                                            <Option value="test">Test</Option>
                                         </Select>
                                     )}
                                 />

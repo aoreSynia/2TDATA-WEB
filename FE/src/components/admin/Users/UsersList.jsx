@@ -125,8 +125,16 @@ const UsersList = () => {
       key: "role",
       width: 100,
       render: (role) => (
-        <Tag color={role === "admin" ? "red" : "blue"}>
-          {role === "admin" ? "Admin" : "User"}
+        <Tag 
+          color={
+            role === "admin" 
+              ? "red" 
+              : role === "test" 
+              ? "purple" 
+              : "blue"
+          }
+        >
+          {role === "admin" ? "Admin" : role === "test" ? "Test" : "Member"}
         </Tag>
       ),
     },
