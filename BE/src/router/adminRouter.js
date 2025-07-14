@@ -10,45 +10,89 @@ import {
   removeDomainFromSite,
   getCurrentSiteInfo
 } from '../controllers/site.js';
-import { getUser } from '../middlewares/getUser.js';
-import { 
-  detectSiteMiddleware,
-  requireSuperAdmin,
-  requireSiteAdmin 
-} from '../middlewares/siteDetection.js';
+import { authAndSiteDetectionMiddleware } from '../middlewares/authAndSiteDetection.js';
 import { uploadLogo, uploadLogoToBase64, handleUploadErrors } from '../middlewares/upload.js';
+import { requirePermission, requireAnyPermission, applySiteIsolation } from '../middlewares/permissionMiddleware.js';
+import { getUserFormMetadata, getAllRoles } from '../controllers/metadata.js';
 
 const router = express.Router();
 
-// Apply site detection first (doesn't require auth)
-router.use(detectSiteMiddleware);
+// Use combined auth and site detection middleware
+router.use(authAndSiteDetectionMiddleware);
 
-// Then require authentication for all admin routes
-// Add extensive logging for Authorization header debugging
-router.use((req, res, next) => {
-  console.log('🔍 Request Headers Debug:', {
-    authorization: req.headers.authorization,
-    'x-debug-auth': req.headers['x-debug-auth'],
-    'x-debug-host': req.headers['x-debug-host'],
-    host: req.headers.host,
-    'user-agent': req.headers['user-agent']?.substring(0, 50) + '...',
-    'content-type': req.headers['content-type'],
-    method: req.method,
-    url: req.url,
-    originalUrl: req.originalUrl
+// Custom middleware to verify admin access
+const verifyAdminAccess = (req, res, next) => {
+  // Check if user is authenticated
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required',
+      error: 'UNAUTHORIZED'
+    });
+  }
+  
+  // Super admin has access to everything
+  if (req.user.role === 'super_admin') {
+    req.isAdmin = true;
+    req.canManageAllSites = true;
+    return next();
+  }
+  
+  // Site admin check - just check role and site_id
+  if (req.user.role === 'site_admin') {
+    // Site admin must have a site assigned
+    if (!req.user.site_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Site admin does not have a site assigned',
+        error: 'NO_SITE_ASSIGNED'
+      });
+    }
+    
+    // Check if accessing their own site
+    // Compare site_id from user with detected site
+    const userSiteId = req.user.site_id._id || req.user.site_id;
+    const currentSiteId = req.site?._id;
+    
+    // Allow access if:
+    // 1. Site IDs match OR
+    // 2. No site detected (accessing via IP/different domain) but user has site_admin role
+    if (!currentSiteId || userSiteId.toString() === currentSiteId.toString()) {
+      req.isAdmin = true;
+      req.canManageAllSites = false;
+      req.isSiteAdmin = true;
+      return next();
+    } else {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only access the admin panel of your assigned site',
+        error: 'SITE_ACCESS_DENIED'
+      });
+    }
+  }
+  
+  // Other roles don't have admin access
+  return res.status(403).json({
+    success: false,
+    message: 'Admin access required',
+    error: 'ADMIN_ACCESS_REQUIRED'
   });
-  next();
-});
+};
 
-router.use(getUser); // ENABLED: Now debugging headers
+// Apply admin access check
+router.use(verifyAdminAccess);
 
-// Debug route for checking permissions
+// Apply site isolation
+router.use(applySiteIsolation);
+
+// Debug routes
 router.get('/debug/permissions', (req, res) => {
   res.json({
     user: {
       id: req.user?._id,
       role: req.user?.role,
-      email: req.user?.email
+      email: req.user?.email,
+      site_id: req.user?.site_id?._id || req.user?.site_id
     },
     site: {
       id: req.site?._id,
@@ -56,94 +100,31 @@ router.get('/debug/permissions', (req, res) => {
       domains: req.site?.domains
     },
     permissions: {
-      isSuperAdmin: req.user?.role === 'super_admin',
-      isSiteAdmin: req.site?.isSiteAdmin ? req.site.isSiteAdmin(req.user?._id) : false,
-      siteAdminData: req.site?.site_admins?.find(admin => 
-        admin.user_id.toString() === req.user?._id.toString()
-      )
+      isAdmin: req.isAdmin,
+      isSiteAdmin: req.isSiteAdmin,
+      canManageAllSites: req.canManageAllSites,
+      siteFilter: req.siteFilter
     }
   });
 });
 
-// Test upload endpoint for debugging
-router.post('/debug/upload', uploadLogo, handleUploadErrors, (req, res) => {
-  console.log('🧪 Debug upload test:', {
-    file: req.file,
-    body: req.body,
-    params: req.params
-  });
-  
-  res.json({
-    success: true,
-    message: 'Upload test completed',
-    file: req.file,
-    body: req.body
-  });
-});
+// Metadata endpoints - available to all admins
+router.get('/metadata/user-form', getUserFormMetadata);
+router.get('/metadata/roles', getAllRoles);
 
-// Custom middleware to allow both super admin and site admin
-const allowAdminAccess = (req, res, next) => {
-  console.log('🔐 Admin access check:', {
-    userId: req.user?._id,
-    userRole: req.user?.role,
-    siteId: req.site?._id,
-    siteName: req.site?.name
-  });
-  
-  // TEMPORARY: Bypass all authentication for debugging
-  console.log('⚠️ TEMPORARY: Bypassing authentication for debugging');
-  req.isSuperAdmin = true; // Mock super admin access
-  return next();
-  
-  // Allow super admin
-  if (req.user && req.user.role === 'super_admin') {
-    console.log('✅ Super admin access granted');
-    req.isSuperAdmin = true;
-    return next();
-  }
-  
-  // Allow site admin with manage_settings permission
-  if (req.site && req.site.isSiteAdmin && req.user && req.site.isSiteAdmin(req.user._id)) {
-    const siteAdmin = req.site.site_admins.find(admin => 
-      admin.user_id.toString() === req.user._id.toString()
-    );
-    
-    console.log('🔍 Site admin check:', {
-      siteAdmin: !!siteAdmin,
-      permissions: siteAdmin?.permissions
-    });
-    
-    if (siteAdmin && siteAdmin.permissions.includes('manage_settings')) {
-      console.log('✅ Site admin access granted');
-      req.isSiteAdmin = true;
-      req.siteAdminPermissions = siteAdmin.permissions;
-      return next();
-    }
-  }
-  
-  console.log('❌ Access denied');
-  return res.status(403).json({
-    success: false,
-    message: 'Admin access required. Need super admin role or site admin with manage_settings permission.',
-    error: 'ADMIN_ACCESS_REQUIRED'
-  });
-};
-
-router.use(allowAdminAccess);
-
-// Admin site management routes matching frontend expectations
-router.get('/sites', getAllSites);
-router.post('/sites', uploadLogoToBase64, handleUploadErrors, createSite);
-router.get('/sites/:id', getSiteById);
-router.get('/sites/:id/stats', getSiteStats);
-router.put('/sites/:id', uploadLogo, handleUploadErrors, updateSite);
-// Special route for admin form with multipart/form-data - using base64 method
-router.put('/sites/edit/:id', uploadLogoToBase64, handleUploadErrors, updateSite);
-router.post('/sites/edit/:id', uploadLogoToBase64, handleUploadErrors, updateSite);
-router.delete('/sites/:id', deleteSite);
+// Site management routes
+router.get('/sites', requirePermission('site.read'), getAllSites);
+router.post('/sites', requirePermission('site.create'), uploadLogoToBase64, handleUploadErrors, createSite);
+router.post('/sites/add', requirePermission('site.create'), uploadLogoToBase64, handleUploadErrors, createSite);
+router.get('/sites/:id', requirePermission('site.read'), getSiteById);
+router.get('/sites/:id/stats', requirePermission('analytics.read'), getSiteStats);
+router.put('/sites/:id', requirePermission('site.update'), uploadLogo, handleUploadErrors, updateSite);
+router.put('/sites/edit/:id', requirePermission('site.update'), uploadLogoToBase64, handleUploadErrors, updateSite);
+router.post('/sites/edit/:id', requirePermission('site.update'), uploadLogoToBase64, handleUploadErrors, updateSite);
+router.delete('/sites/:id', requirePermission('site.delete'), deleteSite);
 
 // Domain management
-router.post('/sites/:id/domains', addDomainToSite);
-router.delete('/sites/:id/domains', removeDomainFromSite);
+router.post('/sites/:id/domains', requirePermission('site.update'), addDomainToSite);
+router.delete('/sites/:id/domains', requirePermission('site.update'), removeDomainFromSite);
 
 export default router;
